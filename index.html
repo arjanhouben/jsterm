@@ -1,0 +1,650 @@
+<html>
+	<head>
+		<title>jsterm</title>
+		<script type="text/javascript" src="jquery-1.9.1.min.js"></script>
+		<script type="text/javascript">
+			var uniqueId = 0;
+			
+			function count( arr, what )
+			{
+				return arr.split( what ).length - 1;
+			}
+			
+			function properties( obj )
+			{
+				var result = [];
+				for ( var k in obj )
+				{
+					if ( obj.hasOwnProperty( k ) )
+					{
+						result.push( k );
+					}
+				}
+				
+				return result;
+			}
+			
+			function DelayedArray( url, onError )
+			{
+				if ( this === window )
+				{
+					return new DelayedArray( url, onError );
+				}
+				
+				this.forEach = function( f )
+				{
+					$.ajax(
+						{
+							"url": url,
+							"success": function( data )
+							{
+								try
+								{
+									f( JSON.parse( data ) );
+								}
+								catch( err )
+								{
+									onError( err );
+								}
+							},
+							"error": onError
+						}
+					);
+				}
+				
+				return this;
+			}
+			
+			function getTerminal( str )
+			{
+				var result;
+				$(".draggable").each(
+					function()
+					{
+						var t = $(this).data( "terminal" );
+						if ( t.title.val() === str )
+						{
+							result = t;
+							return false;
+						}
+					}
+				)
+				return result;
+			}
+		
+			var T = {};
+		
+			function Terminal( str )
+			{
+				if ( typeof str === "string" )
+				{
+					var t = getTerminal( str );
+					if ( t ) return t;
+				}
+				else
+				{
+					str = "Untitled";
+				}
+				if ( this === window ) return null;
+				var self = this;
+				this.div = $( "<div class=\"draggable\"></div>" );
+				this.titlebar = $( "<div class=\"titlebar\"></div>" );
+				this.title = $( "<input type=\"text\" value=\"" + str + "\"/>" );
+				this.close = $( "<div class=\"close\"></div>" );
+				this.textarea = $( "<textarea spellcheck=\"false\" cols=\"80\" row=\"40\"/>" );
+				this.go = $( "<input class=\"go\" type=\"button\" value=\"go\"/>" );
+				this.titlebar.append( this.close );
+				this.titlebar.append( this.title );
+				this.div.data( "terminal", this );
+				this.div.append( this.titlebar );
+				this.div.append( this.textarea );
+				this.div.append( this.go );
+				
+				if ( getTerminal( this.title.val() ) )
+				{
+					var base = this.title.val() + " ";
+					var i = 1;
+					while( getTerminal( base + i ) ) ++i;
+					this.title.val( base + i );
+				}
+				
+				this.text = function()
+				{
+					if ( arguments.length )
+					{
+						self.textarea.val( Array.prototype.join.call( arguments, ", " ) );
+					}
+					return self.textarea.val();
+				}
+				
+				this.append = function()
+				{
+					return self.text( self.text() + Array.prototype.join.call( arguments, ", " ) );
+				}
+				
+				this.appendLine = function()
+				{
+					return self.text( self.text() + Array.prototype.join.call( arguments, ", " ) + '\n' );
+				}
+				
+				this.prepend = function()
+				{
+					return self.text( Array.prototype.join.call( arguments, ", " ) + self.text() );
+				}
+				
+				this.prependLine = function()
+				{
+					return self.text( Array.prototype.join.call( arguments, ", " ) + '\n' + self.text() );
+				}
+				
+				
+				this.lines = function()
+				{
+					return self.text().split("\n");
+				}
+				
+				this.clear = function()
+				{
+					self.textarea.val( "" );
+				}
+				
+				this.id = uniqueId++;
+				
+				this.log = function()
+				{
+					for ( var i = 0, len = arguments.length; i < len; ++i )
+					{
+						console.log( arguments[ i ] );
+					}
+				}
+				
+				function popup( parent, msg )
+				{
+					var box = $("<pre class=\"popup\">" + msg.split( '\n' )[ 0 ] + "</pre>");
+					box.css( "display", "none" );
+					parent.append( box );
+					box.css( "left", ( parent.width() - box.width() ) / 2 );
+					box.fadeIn( 200 );
+					$(document).on(
+						"mousedown.popup." + self.id,
+						function( e )
+						{
+							if ( e.target === box[ 0 ] )
+							{
+								box.text( msg );
+							}
+							else
+							{
+								box.fadeTo( 500, 0, function() { box.remove(); } );
+								$(document).unbind( "mousedown.popup." + self.id );
+							}
+						}
+					);
+				}
+				
+				this.compilerError = function( err )
+				{
+					var regex = new RegExp( /<anonymous>:(\d+):(\d+)/ );
+					var lineAndChar = regex.exec( err );
+					var data = self.text();
+					var start = 0, end = data.length;
+					if ( lineAndChar )
+					{
+						var offset = 0;
+						var selectionRow = parseInt( lineAndChar[ 1 ] ) - 1;
+						start = parseInt( lineAndChar[ 2 ] ) - 1;
+						var m = data.match( new RegExp( "(.*\n){" + selectionRow + "}.{" + start + "}(\\w+)" ) );
+						end = m[ 0 ].length;
+						start = end - m[ 2 ].length;
+					}
+					return [ start, end ];
+				}
+				
+				this.setSelection = function( start, end )
+				{
+					var ta = self.textarea[ 0 ];
+					
+					var data = self.text();
+					var rowCount = count( data, '\n' );
+					var selectionRow = count( data.substring( 0, start ), '\n' );
+					
+					setTimeout(
+						function()
+						{
+							ta.selectionStart = start;
+							ta.selectionEnd = end;
+							if ( selectionRow )
+							{
+								ta.scrollTop = ta.scrollHeight * selectionRow / rowCount;
+							}
+						},
+						50
+					);
+				}
+				
+				this.error = function( err )
+				{
+					self.div.addClass( "error" );
+					if ( err.stack )
+					{
+						var selection = self.compilerError( err.stack );
+						self.setSelection( selection[ 0 ], selection[ 1 ] );
+					
+						popup( self.div, err.stack );
+					}
+					else
+					{
+						popup( self.div, err );
+					}
+				}
+				
+				this.eval = function( str )
+				{
+					try
+					{
+						var jira = function( url )
+						{
+							var startStr = "http://";
+							if ( url.lastIndexOf( startStr, startStr.length ) === -1 )
+							{
+								url = "rest/api/2/" + url;
+							}
+							return new DelayedArray( url, self.error );
+						}
+						eval( str );
+					}
+					catch( err )
+					{
+						self.error( err );
+					}
+				}
+				
+				this.store = function( e )
+				{
+					var data = {
+						"div": self.div.css( [ "top", "left" ] ),
+						"textarea": self.textarea.css( [ "width", "height" ] ),
+						"code": self.textarea.val(),
+						"title" : self.title.val()
+					};
+					localStorage.setItem( "terminal." + self.id, JSON.stringify( data ) );
+				}
+				
+				this.closeTerminal = function()
+				{
+					$(document).unbind( "keyup." + self.id + " mouseup." + self.id );
+					self.div.remove();
+					localStorage.removeItem( "terminal." + self.id );
+				}
+				
+				$(document).on( "keyup." + self.id + " mouseup." + self.id, self.store );
+				
+				this.textarea.on( "input",
+					function()
+					{
+						self.div.removeClass( "error" );
+					}
+				)
+			
+				this.close.on( "mouseup." + self.id, this.closeTerminal );
+				
+				this.title.on(
+					"input",
+					function()
+					{
+						T[ this.value ] = self;
+					}
+				)
+				
+				T[ this.title.val() ] = self;
+			
+				return this;
+			}
+
+			function focusWindow( elem )
+			{
+				if ( !( elem instanceof jQuery ) ) elem = $(elem);
+				if ( elem.hasClass( "top" ) ) return;
+				$(".top").removeClass( "top" );
+				var term = elem.data( "terminal" );
+				if ( term )
+				{
+					var scroll = term.textarea[ 0 ].scrollTop;
+					elem.addClass( "top" );
+					elem.parent().append( elem );
+					term.textarea[ 0 ].scrollTop = scroll;
+				}
+			}
+			function openWindow( str )
+			{
+				var term = new Terminal( str );
+				$(document.body).append( term.div );
+				focusWindow( term.div );
+				return term;
+			}
+			function init()
+			{
+				$("#newwindow").on( "click", openWindow );
+				
+				for ( var i = 0; true; ++i )
+				{
+					var key = "terminal." + i;
+					var t = localStorage.getItem( key );
+					if ( !t ) break;
+					try
+					{
+						var data = JSON.parse( t );
+						var term = openWindow( data[ "title" ] );
+						term.div.css( data[ "div" ] );
+//						term.textarea.css( data[ "textarea" ] );
+						term.textarea.val( data[ "code" ] );
+					}
+					catch( err )
+					{
+						localStorage.removeItem( key );
+					}
+				}
+			}
+			function startdrag( e )
+			{
+				var d = $(e.target).closest(".draggable");
+				if ( e.target.nodeName != "TEXTAREA" || e.altKey )
+				{
+					var doc = $(document);
+					d.attr( "x", e.offsetX + $(e.target).offset().left - d.offset().left );
+					d.attr( "y", e.offsetY + $(e.target).offset().top - d.offset().top );
+					var str = "mousemove." + self.id;
+					doc.bind( str, movewindow( d ) );
+					doc.on( "mouseup", function() { doc.unbind( str ); } );
+				}
+			}
+			function movewindow( obj )
+			{
+				return function( e )
+				{
+					obj.offset(
+						{
+							"left": e.clientX - obj.attr( "x" ),
+							"top": e.clientY - obj.attr( "y" )
+						}
+					)
+				}
+			}
+			function runcode( e )
+			{
+				var p = $(e.target).parent();
+				var term = p.data( "terminal" );
+				var code = p.find( "textarea" ).val();
+				term.eval( code );
+			}
+			function insertAtCaret( elem, str )
+			{
+				var caretPos = elem.selectionStart;
+				elem.value = elem.value.substring( 0, caretPos ) + str + elem.value.substring( caretPos );
+				elem.selectionStart = caretPos + str.length;
+				elem.selectionEnd = caretPos + str.length;
+			}
+			function getLinesBeforeSelection( elem )
+			{
+				var end = elem.value.lastIndexOf( '\n', elem.selectionStart - 1 );
+				if ( end < 0 ) return [];
+				return elem.value.substring( 0, end ).split( '\n' );
+			}
+			function getLinesAfterSelection( elem )
+			{
+				var start = elem.value.indexOf( '\n', elem.selectionEnd );
+				if ( start === -1 ) return [];
+				return elem.value.substring( start + 1 ).split( '\n' );
+			}
+			function getLinesInSelection( elem )
+			{
+				var lines = elem.value.split( '\n' );
+				var before = getLinesBeforeSelection( elem ).length;
+				var after = getLinesAfterSelection( elem ).length;
+				lines.splice( 0, before );
+				lines.splice( lines.length - after, after );
+				return lines;
+			}
+			function applyOnSelectedLines( elem, f, selection )
+			{
+				var result = getLinesBeforeSelection( elem );
+				var tmp = getLinesInSelection( elem );
+				tmp.forEach(
+					function( k, v )
+					{
+						result.push( f( k ) );
+					}
+				);
+				var s = [ elem.selectionStart, elem.selectionEnd ];
+				elem.value = result.concat( getLinesAfterSelection( elem ) ).join( '\n' );
+				if ( selection ) s = selection( s );
+				elem.selectionStart = s[ 0 ];
+				elem.selectionEnd = s[ 1 ];
+			}
+			function insertTab( elem )
+			{
+				applyOnSelectedLines(
+					elem,
+					function( str )
+					{
+						return '\t' + str;
+					},
+					function( selection )
+					{
+						return [ selection[ 0 ] + 1, selection[ 1 ] + 1 ];
+					}
+				)
+			}
+			function removeTab( elem )
+			{
+				applyOnSelectedLines(
+					elem,
+					function( str )
+					{
+						return str.replace( /^\s/, "" );
+					},
+					function( selection )
+					{
+						return [ selection[ 0 ] - 1, selection[ 1 ] - 1 ];
+					}
+				)
+			}
+			function insertEnter( elem )
+			{
+				var lines = getLinesInSelection( elem );
+				var whitespace = lines[ lines.length - 1 ].match( /^\s*/ );
+				insertAtCaret( elem, '\n' + whitespace[ 0 ] );
+			}
+			function removeSelection( elem )
+			{
+				var caretPos = elem.selectionStart;
+				elem.value = elem.value.substring( 0, elem.selectionStart ) + elem.value.substring( elem.selectionEnd );
+				elem.selectionStart = caretPos;
+			}
+			function keyFilter( e )
+			{
+				switch ( e.keyCode )
+				{
+					case 9: // tab
+						if ( e.shiftKey )
+						{
+							removeTab( e.target );
+						}
+						else
+						{
+							insertTab( e.target );
+						}
+						e.preventDefault();
+						break;
+					case 13: // enter
+						if ( e.ctrlKey || e.metaKey )
+						{
+							runcode( e );
+						}
+						else
+						{
+							removeSelection( e.target );
+							insertEnter( e.target );
+						}
+						e.preventDefault();
+						break;
+				}
+			}
+			$(document).on(
+				"mousedown",
+				".draggable",
+				startdrag
+			).on(
+				"mouseup",
+				".go",
+				runcode
+			).on(
+				"keydown",
+				"textarea",
+				keyFilter
+			).on(
+				"mousedown",
+				function( e )
+				{
+					focusWindow( $(e.target).parents( ".draggable" ) );
+				}
+			)
+			$().ready( init );
+		</script>
+		<style>
+			html, body
+			{
+				background-color: #789;
+			}
+			.draggable
+			{
+				position: fixed;
+				background-color: transparent;
+				border-radius: 7px 7px 2px 2px;
+			    box-shadow: 0px 5px 10px #000;
+			}
+			.top
+			{
+			    box-shadow: 0px 5px 40px #000;
+			}
+			.titlebar
+			{
+				position: relative;
+				height: 22px;
+				border-radius: 5px 5px 0 0;
+				background: #aaa;
+			}
+			.titlebar > input
+			{
+				top: 4px;
+				left: 25%;
+				width: 50%;
+				position: absolute;
+				display: block;
+				font-size: 8pt;
+				text-align: center;
+				background-color: transparent;
+				border: none;
+				cursor: default;
+			}
+			.top .titlebar
+			{
+				background: -moz-linear-gradient(top,  #cccccc 0%, #eeeeee 5%, #dddddd 10%, #aaaaaa 90%, #999999 95%, #777777 100%);
+				background: -webkit-gradient(linear, left top, left bottom, color-stop(0%,#cccccc), color-stop(5%,#eeeeee), color-stop(10%,#dddddd), color-stop(90%,#aaaaaa), color-stop(95%,#999999), color-stop(100%,#777777));
+				background: -webkit-linear-gradient(top,  #cccccc 0%,#eeeeee 5%,#dddddd 10%,#aaaaaa 90%,#999999 95%,#777777 100%);
+				background: -o-linear-gradient(top,  #cccccc 0%,#eeeeee 5%,#dddddd 10%,#aaaaaa 90%,#999999 95%,#777777 100%);
+				background: -ms-linear-gradient(top,  #cccccc 0%,#eeeeee 5%,#dddddd 10%,#aaaaaa 90%,#999999 95%,#777777 100%);
+				background: linear-gradient(to bottom,  #cccccc 0%,#eeeeee 5%,#dddddd 10%,#aaaaaa 90%,#999999 95%,#777777 100%);
+				filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#cccccc', endColorstr='#777777',GradientType=0 );
+			}
+			textarea
+			{
+				position: relative;
+				width: 100px;
+				height: 60px;
+				background-color: rgba( 0, 0, 0, 0.9 );
+				color: #888;
+				display: block;
+				border: none;
+				font-family: "courier";
+				resize: both;
+				border-radius: 0 0 2px 2px;
+				-moz-tab-size: 4;
+				-o-tab-size: 4;
+				tab-size: 4;
+			}
+			textarea::selection
+			{
+				background-color: darkgray;
+			}
+			.error textarea::selection
+			{
+				background-color: transparent;
+				color: #f00;
+			}
+			.top textarea
+			{
+				color: #aaa;
+			}
+			:focus
+			{
+				outline: 0;
+				outline: none;
+			}
+			.noselect
+			{
+				-webkit-touch-callout: none;
+				-webkit-user-select: none;
+				-khtml-user-select: none;
+				-moz-user-select: none;
+				-ms-user-select: none;
+				user-select: none;
+			}
+			.go
+			{
+				position: absolute;
+				right: 22px;
+				bottom: 2px;
+				opacity: 0.5;
+			}
+			.top .go
+			{
+				opacity: 1;
+			}
+			#log
+			{
+				position: fixed;
+				left: 0;
+				right: 0;
+				bottom: 0;
+				height: 100px;
+			}
+			.close
+			{
+				position: absolute;
+				top: 6px;
+				left: 6px;
+				width: 10px;
+				height: 10px;
+				background-color: rgba( 0, 0, 0, 0.5 );
+				border-radius: 5px;
+			}
+			.close:hover
+			{
+				width: 6px;
+				height: 6px;
+				background-color: rgba( 0, 0, 0, 0.25 );
+				border: 2px solid rgba( 0, 0, 0, 0.5 );
+			}
+			.popup
+			{
+				position: absolute;
+				background-color: red;
+			}
+		</style>
+	</head>
+	<body class="noselect">
+		<input type="button" value="new window" id="newwindow" />
+		<div id="log"></div>
+	</body>
+</html>
